@@ -76,6 +76,7 @@ def make_handler(service: Service, static_dir: str):
         def do_GET(self) -> None:
             try:
                 path = urlparse(self.path).path
+                query = parse_qs(urlparse(self.path).query)
                 if path == "/health":
                     self._json(200, {"status": "ok"})
                 elif path == "/":
@@ -84,11 +85,46 @@ def make_handler(service: Service, static_dir: str):
                     actor, role = self._identity()
                     del actor
                     self._json(200, {"items": service.list_items(role)})
+                elif path == "/api/devices":
+                    actor, role = self._identity()
+                    del actor
+                    status = query.get("status", [None])[0]
+                    self._json(200, {"devices": service.list_devices(role, status)})
+                elif path == "/api/outlets":
+                    actor, role = self._identity()
+                    del actor
+                    status = query.get("status", [None])[0]
+                    self._json(200, {"outlets": service.list_outlets(role, status)})
+                elif path.startswith("/api/devices/") and path.endswith("/change-log"):
+                    device_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"events": service.device_change_log(device_id, role)})
+                elif path.startswith("/api/outlets/") and path.endswith("/change-log"):
+                    outlet_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"events": service.outlet_change_log(outlet_id, role)})
+                elif path.startswith("/api/outlets/") and path.endswith("/records"):
+                    outlet_id = int(path.split("/")[3])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, {"records": service.list_outlet_records(outlet_id, role)})
                 elif path.startswith("/api/items/") and path.endswith("/records"):
                     item_id = int(path.split("/")[3])
                     actor, role = self._identity()
                     del actor
                     self._json(200, {"records": service.list_records(item_id, role)})
+                elif path.startswith("/api/devices/"):
+                    device_id = int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_device(device_id, role))
+                elif path.startswith("/api/outlets/"):
+                    outlet_id = int(path.rsplit("/", 1)[-1])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_outlet(outlet_id, role))
                 elif path.startswith("/api/items/"):
                     item_id = int(path.rsplit("/", 1)[-1])
                     actor, role = self._identity()
@@ -110,6 +146,32 @@ def make_handler(service: Service, static_dir: str):
                 body = self._body()
                 if path == "/api/items":
                     self._json(201, service.create_item(body, actor, role))
+                elif path == "/api/devices":
+                    self._json(201, service.create_device(body, actor, role))
+                elif path == "/api/outlets":
+                    self._json(201, service.create_outlet(body, actor, role))
+                elif path.startswith("/api/devices/") and path.endswith("/stop"):
+                    device_id = int(path.split("/")[3])
+                    self._json(200, service.stop_device(device_id, body, actor, role))
+                elif path.startswith("/api/devices/") and path.endswith("/start"):
+                    device_id = int(path.split("/")[3])
+                    self._json(200, service.start_device(device_id, body, actor, role))
+                elif path.startswith("/api/devices/") and path.endswith("/links"):
+                    device_id = int(path.split("/")[3])
+                    if body.get("action") == "unlink":
+                        self._json(200, service.unlink_device(device_id, body, actor, role))
+                    self._json(201, service.link_device(device_id, body, actor, role))
+                elif path.startswith("/api/outlets/") and path.endswith("/transition"):
+                    outlet_id = int(path.split("/")[3])
+                    self._json(200, service.transition_outlet(outlet_id, body, actor, role))
+                elif path.startswith("/api/outlets/") and path.endswith("/records"):
+                    outlet_id = int(path.split("/")[3])
+                    self._json(201, service.add_outlet_record(outlet_id, body, actor, role))
+                elif "/records/" in path and path.endswith("/close"):
+                    outlet_id = int(path.split("/")[3])
+                    record_id = int(path.split("/")[5])
+                    self._json(200, service.close_outlet_record(
+                        outlet_id, record_id, actor, role))
                 elif path.startswith("/api/items/") and path.endswith("/records"):
                     item_id = int(path.split("/")[3])
                     self._json(201, service.add_record(item_id, body, actor, role))
