@@ -97,7 +97,23 @@ def make_handler(service: Service, static_dir: str):
                 elif path == "/api/audit":
                     actor, role = self._identity()
                     del actor
-                    self._json(200, {"events": service.audit(role)})
+                    query = parse_qs(urlparse(self.path).query)
+                    entity_id = query.get("entity_id", [None])[0]
+                    entity_type = query.get("entity_type", [None])[0]
+                    entity_id = int(entity_id) if entity_id else None
+                    self._json(200, {"events": service.audit(
+                        role, entity_id, entity_type)})
+                elif path == "/api/devices":
+                    actor, role = self._identity()
+                    del actor
+                    query = parse_qs(urlparse(self.path).query)
+                    status = query.get("status", [None])[0]
+                    self._json(200, {"devices": service.list_devices(role, status)})
+                elif path.startswith("/api/devices/") and len(path.strip("/").split("/")) == 3:
+                    device_id = int(path.strip("/").split("/")[2])
+                    actor, role = self._identity()
+                    del actor
+                    self._json(200, service.get_device(device_id, role))
                 else:
                     self._json(404, {"error": "not_found"})
             except Exception as exc:
@@ -110,6 +126,20 @@ def make_handler(service: Service, static_dir: str):
                 body = self._body()
                 if path == "/api/items":
                     self._json(201, service.create_item(body, actor, role))
+                elif path == "/api/devices":
+                    self._json(201, service.create_device(body, actor, role))
+                elif path.startswith("/api/devices/") and path.endswith("/transition"):
+                    device_id = int(path.split("/")[3])
+                    self._json(200, service.transition_device(
+                        device_id, body, actor, role))
+                elif path.startswith("/api/devices/") and path.endswith("/outfalls"):
+                    device_id = int(path.split("/")[3])
+                    if "link_id" in body:
+                        self._json(200, service.detach_outfall(
+                            device_id, body, actor, role))
+                    else:
+                        self._json(201, service.attach_outfall(
+                            device_id, body, actor, role))
                 elif path.startswith("/api/items/") and path.endswith("/records"):
                     item_id = int(path.split("/")[3])
                     self._json(201, service.add_record(item_id, body, actor, role))

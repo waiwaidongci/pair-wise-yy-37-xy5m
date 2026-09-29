@@ -20,3 +20,20 @@ def validate_transition(current,target):
     if not can_transition(current,target): raise ConflictError(f"不能从{current}转换到{target}")
 def completion_blockers(target,open_records): return ["仍有未关闭事项"] if target in TERMINAL_STATES and open_records>0 else []
 def role_for_transition(target): return set(TRANSITION_ROLES.get(target,[]))
+DEVICE_ENTITY='治理设备'; DEVICE_STATES=['in_use','stopped']; DEVICE_TRANSITIONS={'in_use':['stopped'],'stopped':['in_use']}; DEVICE_MANAGE_ROLES=set(['compliance_manager']); INSPECTION_STATE='inspection'
+def validate_device_transition(current,target):
+    if current not in DEVICE_STATES or target not in DEVICE_STATES: raise ValidationError("未知设备状态")
+    if target not in DEVICE_TRANSITIONS.get(current,[]): raise ConflictError(f"设备不能从{current}转换到{target}")
+def device_stop_blockers(links):
+    blockers=[]
+    for link in links:
+        if int(link['open_count'])>0: blockers.append(f"排放口#{link['item_id']}存在未关闭问题，不能停用设备")
+        if link['item_status']==INSPECTION_STATE and int(link['active_device_count'])<=1:
+            blockers.append(f"排放口#{link['item_id']}正在检查中，该设备是其唯一在用设备，不能停用")
+    return blockers
+def inspection_device_blockers(link_count,active_device_count):
+    return ["排放口已关联治理设备但无在用设备，不能进入检查"] if int(link_count)>0 and int(active_device_count)==0 else []
+def verify_link_snapshot(links,expected_links):
+    current={int(link['link_id']):int(link['link_version']) for link in links}
+    if current!=expected_links: raise ConflictError("设备关联关系已变更，请刷新后重试")
+    return True
