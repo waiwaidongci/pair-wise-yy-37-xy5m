@@ -1,1 +1,247 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>空气污染源许可与合规检查</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#17212b}pre{background:#f4f7f9;padding:1rem;overflow:auto}button{padding:.55rem 1rem}</style></head><body><h1>空气污染源许可与合规检查</h1><p>管理设施、排放口、治理设备、现场检查、整改和许可续期</p><p>申报量超过许可量或检查发现高严重度问题时提高优先级；存在未关闭整改时不能批准。</p><button onclick="loadItems()">刷新列表</button><pre id="out">使用X-Actor和X-Role请求头调用接口。</pre><script>async function loadItems(){const r=await fetch('/api/items',{headers:{'X-Actor':'demo','X-Role':'viewer'}});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}</script></body></html>
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>治理设备与排放口联动</title>
+<style>
+  :root { --line:#d9dee7; --bg:#f5f7fa; --blue:#2563eb; --red:#dc2626; --green:#16a34a; --amber:#d97706; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+         background:var(--bg); color:#1f2937; }
+  header { background:#0f3d66; color:#fff; padding:14px 20px; }
+  header h1 { margin:0; font-size:18px; }
+  .bar { display:flex; gap:10px; align-items:center; padding:10px 20px;
+         background:#fff; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  .bar label { font-size:13px; color:#4b5563; }
+  select, input, button, textarea { font:inherit; font-size:13px; padding:5px 8px;
+         border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { cursor:pointer; background:var(--blue); color:#fff; border-color:var(--blue); padding:5px 12px; }
+  button.ghost { background:#fff; color:#374151; border-color:var(--line); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  main { display:grid; grid-template-columns: 1fr 1fr; gap:14px; padding:14px 20px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .card h3 { margin:0 0 8px; font-size:14px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  .muted { color:#6b7280; font-size:12px; }
+  .tag { font-size:11px; padding:1px 8px; border-radius:999px; border:1px solid transparent; }
+  .running, .active { color:var(--green); border-color:var(--green); }
+  .stopped { color:var(--red); border-color:var(--red); }
+  .inspection { color:var(--amber); border-color:var(--amber); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid #eef1f5; vertical-align:top; }
+  th { color:#6b7280; font-weight:600; }
+  .row-actions { display:flex; gap:6px; flex-wrap:wrap; }
+  .log { font-size:12px; max-height:260px; overflow:auto; }
+  .log .e { border-bottom:1px dashed #e5e7eb; padding:4px 0; }
+  .log .a { color:var(--blue); font-weight:600; }
+  pre { white-space:pre-wrap; word-break:break-all; margin:4px 0 0; font-size:11.5px; color:#4b5563; }
+  .full { grid-column: 1 / -1; }
+  #toast { position:fixed; right:16px; bottom:16px; max-width:420px; }
+  .toast-item { margin-top:8px; padding:10px 14px; border-radius:8px; color:#fff; font-size:13px;
+                box-shadow:0 4px 14px rgba(0,0,0,.15); }
+  .ok { background:var(--green); } .err { background:var(--red); }
+</style>
+</head>
+<body>
+<header><h1>治理设备 ↔ 排放口联动控制台</h1></header>
+<div class="bar">
+  <label>操作人 <input id="actor" value="operator01" size="10"></label>
+  <label>角色
+    <select id="role">
+      <option value="applicant">applicant 申报方</option>
+      <option value="inspector" selected>inspector 检查员</option>
+      <option value="compliance_manager">compliance_manager 合规管理员</option>
+      <option value="viewer">viewer 只读</option>
+    </select>
+  </label>
+  <button class="ghost" onclick="loadAll()">刷新</button>
+  <button onclick="createDevice()">新建设备</button>
+  <button onclick="createOutlet()">新建排放口</button>
+  <span class="muted">所有启停 / 状态提交 / 解除关联都带当前版本，过期版本返回 409 冲突</span>
+</div>
+<main>
+  <section>
+    <h3 class="muted" style="margin:4px 4px 8px">治理设备（一台设备可服务多个排放口）</h3>
+    <div id="devices"></div>
+  </section>
+  <section>
+    <h3 class="muted" style="margin:4px 4px 8px">排放口</h3>
+    <div id="outlets"></div>
+  </section>
+  <section class="full">
+    <div class="card"><h3>全局审计链（每次启停与关联变更都记录操作人）</h3>
+      <div id="audit" class="log"></div></div>
+  </section>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+function hdr() { return {"X-Actor": $("actor").value || "anonymous", "X-Role": $("role").value,
+                         "Content-Type": "application/json"}; }
+function esc(s){ return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+async function api(method, url, body) {
+  const res = await fetch(url, {method, headers:hdr(), body: body ? JSON.stringify(body) : undefined});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || (data.error + " (" + res.status + ")"));
+  return data;
+}
+function toast(msg, ok) {
+  const t = document.createElement("div");
+  t.className = "toast-item " + (ok ? "ok" : "err"); t.textContent = msg;
+  $("toast").appendChild(t); setTimeout(() => t.remove(), 4000);
+}
+function stTag(s){ return `<span class="tag ${esc(s)}">${esc(s)}</span>`; }
+
+async function loadAll() {
+  try {
+    const [ds, os, audit] = await Promise.all([
+      api("GET", "/api/devices"), api("GET", "/api/outlets"), api("GET", "/api/audit")]);
+    renderDevices(ds.devices); renderOutlets(os.outlets); renderAudit(audit.events);
+  } catch (e) { toast("加载失败：" + e.message, false); }
+}
+function renderDevices(list) {
+  $("devices").innerHTML = list.map(d => `
+    <div class="card">
+      <h3>#${d.id} ${esc(d.name)} ${stTag(d.status)}
+        <span class="muted">version ${d.version}</span>
+        ${d.open_issue_outlet_ids.length ? `<span class="tag inspection">关联未关闭问题: ${d.open_issue_outlet_ids.join(",")}</span>` : ""}
+      </h3>
+      <div class="muted">${esc(d.description || "")}</div>
+      <table><tr><th>排放口</th><th>排放口状态</th><th>关联版本</th><th>操作</th></tr>
+      ${d.outlets.map(l => `<tr>
+        <td>#${l.outlet_id} ${esc(l.outlet_name)}</td>
+        <td>${stTag(l.outlet_status)}</td>
+        <td>v${l.link_version}</td>
+        <td class="row-actions">
+          <button class="ghost" onclick="unlink(${d.id},${l.outlet_id},${l.link_version})">解除关联</button>
+        </td></tr>`).join("") || '<tr><td colspan="4" class="muted">暂未关联排放口</td></tr>'}
+      </table>
+      <div class="row-actions" style="margin-top:8px">
+        <button class="ghost" onclick="linkPick(${d.id})">关联排放口</button>
+        ${d.status === "running"
+          ? `<button onclick="stopDevice(${d.id},${d.version})">停用</button>`
+          : `<button onclick="startDevice(${d.id},${d.version})">恢复启用</button>`}
+        <button class="ghost" onclick="showLog('device',${d.id})">变更记录</button>
+      </div>
+      <div id="log-device-${d.id}" class="log" style="display:none"></div>
+    </div>`).join("") || '<div class="card muted">暂无设备</div>';
+}
+function renderOutlets(list) {
+  $("outlets").innerHTML = list.map(o => `
+    <div class="card">
+      <h3>#${o.id} ${esc(o.name)} ${stTag(o.status)}
+        <span class="muted">version ${o.version}</span>
+        ${o.open_issue_count ? `<span class="tag inspection">未关闭问题 ${o.open_issue_count}</span>` : ""}
+      </h3>
+      <div class="muted">在用设备 ${o.running_device_count} 台（共关联 ${o.devices.length} 台）</div>
+      <table><tr><th>治理设备</th><th>设备状态</th><th>设备版本</th></tr>
+      ${o.devices.map(l => `<tr><td>#${l.device_id} ${esc(l.device_name)}</td>
+        <td>${stTag(l.device_status)}</td><td>v${l.device_version}</td></tr>`).join("")
+        || '<tr><td colspan="3" class="muted">未关联设备</td></tr>'}
+      </table>
+      <div class="row-actions" style="margin-top:8px">
+        ${o.status === "active"
+          ? `<button onclick="outletGo(${o.id},'inspection',${o.version})">进入现场检查</button>`
+          : `<button onclick="outletGo(${o.id},'active',${o.version})">检查结束 / 恢复</button>`}
+        <button class="ghost" onclick="addIssue(${o.id})">登记问题（检查 / 整改 / 检修）</button>
+        <button class="ghost" onclick="showRecords(${o.id})">问题清单</button>
+        <button class="ghost" onclick="showLog('outlet',${o.id})">变更记录</button>
+      </div>
+      <div id="log-outlet-${o.id}" class="log" style="display:none"></div>
+      <div id="rec-${o.id}" style="display:none"></div>
+    </div>`).join("") || '<div class="card muted">暂无排放口</div>';
+}
+function renderAudit(events) {
+  $("audit").innerHTML = events.slice().reverse().map(e => `
+    <div class="e"><span class="a">${esc(e.action)}</span> · ${esc(e.entity_type)}#${e.entity_id}
+      · <b>${esc(e.actor)}</b> <span class="muted">${esc(e.created_at)}</span>
+      <pre>${esc(JSON.stringify(e.detail, null, 0))}</pre></div>`).join("") || '<span class="muted">暂无审计事件</span>';
+}
+async function renderEntityLog(kind, id, el) {
+  const data = await api("GET", `/api/${kind}s/${id}/change-log`);
+  el.innerHTML = data.events.slice().reverse().map(e => `
+    <div class="e"><span class="a">${esc(e.action)}</span> · <b>${esc(e.actor)}</b>
+      <span class="muted">${esc(e.created_at)}</span>
+      <pre>${esc(JSON.stringify(e.detail))}</pre></div>`).join("") || '<span class="muted">暂无记录</span>';
+}
+async function showLog(kind, id) {
+  const el = $(`log-${kind}-${id}`);
+  el.style.display = el.style.display === "none" ? "block" : "none";
+  if (el.style.display === "block") { try { await renderEntityLog(kind, id, el); }
+    catch (e) { el.textContent = e.message; } }
+}
+
+async function createDevice() {
+  const name = prompt("设备名称"); if (!name) return;
+  const description = prompt("描述（可留空）") || "";
+  try { await api("POST", "/api/devices", {name, description}); toast("设备已创建", true); loadAll(); }
+  catch (e) { toast(e.message, false); }
+}
+async function createOutlet() {
+  const name = prompt("排放口名称"); if (!name) return;
+  const description = prompt("描述（可留空）") || "";
+  try { await api("POST", "/api/outlets", {name, description}); toast("排放口已创建", true); loadAll(); }
+  catch (e) { toast(e.message, false); }
+}
+async function linkPick(deviceId) {
+  const outletId = parseInt(prompt("输入要关联的排放口 ID"), 10);
+  if (!outletId) return;
+  try { await api("POST", `/api/devices/${deviceId}/links`, {outlet_id: outletId});
+        toast("关联成功", true); loadAll(); } catch (e) { toast(e.message, false); }
+}
+async function unlink(deviceId, outletId, ver) {
+  if (!confirm(`解除设备#${deviceId} 与排放口#${outletId} 的关联？关联版本 v${ver}`)) return;
+  try { await api("POST", `/api/devices/${deviceId}/links`,
+        {action: "unlink", outlet_id: outletId, expected_version: ver});
+        toast("关联已解除", true); loadAll(); } catch (e) { toast(e.message, false); }
+}
+async function stopDevice(id, ver) {
+  const reason = prompt("停用原因（可留空）") || "";
+  try { await api("POST", `/api/devices/${id}/stop`,
+        Object.assign({expected_version: ver}, reason ? {reason} : {}));
+        toast("设备已停用", true); loadAll(); } catch (e) { toast(e.message, false); }
+}
+async function startDevice(id, ver) {
+  // 恢复启用时同时提交设备版本与全部关联关系版本
+  const d = await api("GET", `/api/devices/${id}`);
+  const link_versions = {};
+  d.outlets.forEach(l => { link_versions[l.outlet_id] = l.link_version; });
+  try { await api("POST", `/api/devices/${id}/start`,
+        {expected_version: ver, link_versions});
+        toast("设备已恢复启用", true); loadAll(); } catch (e) { toast(e.message, false); }
+}
+async function outletGo(id, target, ver) {
+  try { await api("POST", `/api/outlets/${id}/transition`, {target, expected_version: ver});
+        toast("排放口状态已更新: " + target, true); loadAll(); }
+  catch (e) { toast(e.message, false); }
+}
+async function addIssue(outletId) {
+  const kind = prompt("问题类型（现场检查 / 整改 / 治理设备检修）", "现场检查");
+  if (!kind) return;
+  const detail = prompt("问题描述"); if (!detail) return;
+  const ref = prompt("外部编号（可留空）") || null;
+  try { await api("POST", `/api/outlets/${outletId}/records`,
+        {kind, detail, external_ref: ref}); toast("问题已登记", true);
+        showRecords(outletId); loadAll(); } catch (e) { toast(e.message, false); }
+}
+async function showRecords(outletId) {
+  const box = $(`rec-${outletId}`);
+  box.style.display = "block";
+  const data = await api("GET", `/api/outlets/${outletId}/records`);
+  box.innerHTML = `<table style="margin-top:6px"><tr><th>#</th><th>类型</th><th>描述</th><th>状态</th><th></th></tr>` +
+    data.records.map(r => `<tr><td>${r.id}</td><td>${esc(r.kind)}</td><td>${esc(r.detail)}</td>
+      <td><span class="tag ${r.status === "open" ? "inspection" : "active"}">${r.status}</span></td>
+      <td>${r.status === "open" ? `<button class="ghost" onclick="closeIssue(${outletId},${r.id})">关闭</button>` : ""}</td></tr>`).join("") +
+    "</table>";
+}
+async function closeIssue(outletId, recordId) {
+  try { await api("POST", `/api/outlets/${outletId}/records/${recordId}/close`, {});
+        toast("问题已关闭", true); showRecords(outletId); loadAll(); }
+  catch (e) { toast(e.message, false); }
+}
+$("role").addEventListener("change", loadAll);
+loadAll();
+</script>
+</body>
+</html>

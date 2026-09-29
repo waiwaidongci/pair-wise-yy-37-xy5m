@@ -11,12 +11,25 @@ class NotFoundError(DomainError): kind=ErrorKind.NOT_FOUND
 class PermissionDenied(DomainError): kind=ErrorKind.FORBIDDEN
 class ConflictError(DomainError): kind=ErrorKind.CONFLICT
 SEVERITIES=['low', 'medium', 'high', 'critical']; STATES=['draft', 'submitted', 'inspection', 'correction', 'approved']; ROLES=['applicant', 'inspector', 'compliance_manager', 'viewer']
+DEVICE_STATES=['running', 'stopped']; OUTLET_STATES=['active', 'inspection']
 @dataclass(frozen=True)
 class Item:
     id:int; title:str; description:str; severity:str; quantity:float; threshold:float; status:str; version:int; external_ref:Optional[str]; created_by:str; created_at:str; updated_at:str
 @dataclass(frozen=True)
+class Device:
+    id:int; name:str; description:str; status:str; version:int; external_ref:Optional[str]; created_by:str; created_at:str; updated_at:str
+@dataclass(frozen=True)
+class Outlet:
+    id:int; name:str; description:str; status:str; version:int; external_ref:Optional[str]; created_by:str; created_at:str; updated_at:str
+@dataclass(frozen=True)
+class DeviceOutlet:
+    id:int; device_id:int; outlet_id:int; version:int; created_by:str; created_at:str; updated_at:str
+@dataclass(frozen=True)
 class Record:
     id:int; item_id:int; kind:str; detail:str; status:str; external_ref:Optional[str]; created_by:str; created_at:str
+@dataclass(frozen=True)
+class OutletRecord:
+    id:int; outlet_id:int; kind:str; detail:str; status:str; external_ref:Optional[str]; created_by:str; created_at:str
 @dataclass(frozen=True)
 class AuditEntry:
     id:int; action:str; entity_type:str; entity_id:int; actor:str; detail:Dict[str,Any]; previous_hash:str; entry_hash:str; created_at:str
@@ -34,5 +47,9 @@ def require_number(value,field,minimum=0.0):
     except (TypeError,ValueError): raise ValidationError(f"{field}必须是数字")
     if number<minimum: raise ValidationError(f"{field}不能小于{minimum}")
     return number
+def require_version(value,field="expected_version"):
+    if isinstance(value,bool) or not isinstance(value,int) or value<1:
+        raise ValidationError(f"{field}必须是正整数")
+    return value
 def ensure_role(role,allowed):
     if role not in allowed: raise PermissionDenied("当前角色无权执行该操作")
