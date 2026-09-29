@@ -1,1 +1,140 @@
-<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>空气污染源许可与合规检查</title><style>body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;max-width:900px;margin:2rem auto;padding:0 1rem;color:#17212b}pre{background:#f4f7f9;padding:1rem;overflow:auto}button{padding:.55rem 1rem}</style></head><body><h1>空气污染源许可与合规检查</h1><p>管理设施、排放口、治理设备、现场检查、整改和许可续期</p><p>申报量超过许可量或检查发现高严重度问题时提高优先级；存在未关闭整改时不能批准。</p><button onclick="loadItems()">刷新列表</button><pre id="out">使用X-Actor和X-Role请求头调用接口。</pre><script>async function loadItems(){const r=await fetch('/api/items',{headers:{'X-Actor':'demo','X-Role':'viewer'}});document.getElementById('out').textContent=JSON.stringify(await r.json(),null,2)}</script></body></html>
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>空气污染源许可与合规检查</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;max-width:1000px;margin:1.5rem auto;padding:0 1rem;color:#17212b}
+h1{font-size:1.4rem;margin-bottom:.2rem}
+.tabs{display:flex;gap:.5rem;margin:1rem 0}
+.tabs button{padding:.5rem 1rem;border:1px solid #b7c4cf;background:#f4f7f9;cursor:pointer;border-radius:6px}
+.tabs button.active{background:#1d6fb5;color:#fff;border-color:#1d6fb5}
+.panel{display:none}.panel.active{display:block}
+.card{border:1px solid #d5dde4;border-radius:8px;padding:.8rem 1rem;margin:.6rem 0;background:#fff}
+.card h3{margin:.1rem 0 .4rem;font-size:1.05rem}
+.meta{color:#5b6b78;font-size:.85rem;margin:.2rem 0}
+.badge{display:inline-block;padding:.1rem .55rem;border-radius:10px;font-size:.78rem;color:#fff}
+.in_use,.approved{background:#2e8b57}.stopped,.draft{background:#8a97a3}
+.inspection,.submitted{background:#d08a1d}.correction{background:#b5495b}
+pre{background:#f4f7f9;padding:.8rem;overflow:auto;border-radius:6px;font-size:.82rem}
+input,select{padding:.4rem .5rem;margin:.15rem .3rem .15rem 0;border:1px solid #b7c4cf;border-radius:4px}
+button.act{padding:.4rem .9rem;border:none;background:#1d6fb5;color:#fff;border-radius:5px;cursor:pointer}
+button.danger{background:#b5495b}
+.row{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem;margin-top:.5rem}
+.identity{font-size:.85rem;color:#5b6b78}
+#msg{min-height:1.2rem;font-size:.85rem;color:#b5495b}
+</style>
+</head>
+<body>
+<h1>空气污染源许可与合规检查</h1>
+<p class="identity">身份 <input id="actor" value="manager" style="width:8rem">
+角色 <select id="role">
+<option value="compliance_manager" selected>compliance_manager（设备管理）</option>
+<option value="inspector">inspector（检查/整改）</option>
+<option value="applicant">applicant（申报）</option>
+<option value="viewer">viewer（只读）</option></select>
+<button onclick="loadAll()">刷新</button></p>
+<div class="tabs">
+<button class="active" onclick="showTab('items',this)">排放口 / 许可</button>
+<button onclick="showTab('devices',this)">治理设备</button>
+<button onclick="showTab('audit',this)">变更记录</button>
+</div>
+<div id="msg"></div>
+<div id="items" class="panel active"><div id="itemsList"></div></div>
+<div id="devices" class="panel"><div id="deviceForm" class="card"></div><div id="deviceList"></div></div>
+<div id="audit" class="panel"><pre id="auditOut">点击刷新查看变更记录…</pre></div>
+
+<script>
+const $=id=>document.getElementById(id);
+function headers(extra){return Object.assign({'X-Actor':$('actor').value||'anon','X-Role':$('role').value},extra||{})}
+function msg(m){$('msg').textContent=m||''}
+async function api(path,method,body){
+  const opt={method:method||'GET',headers:headers({'Content-Type':'application/json'})};
+  if(body)opt.body=JSON.stringify(body);
+  const r=await fetch(path,opt);const data=await r.json();
+  if(!r.ok){msg((data.error||'error')+': '+(data.message||''));throw data}
+  msg('');return data
+}
+const STATE_CN={draft:'草稿',submitted:'已提交',inspection:'检查中',correction:'整改中',approved:'已批准',in_use:'在用',stopped:'停用'};
+function badge(s){return `<span class="badge ${s}">${STATE_CN[s]||s}</span>`}
+function esc(v){return String(v==null?'':v).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+
+async function loadItems(){
+  const d=await api('/api/items');
+  $('itemsList').innerHTML=d.items.map(it=>`
+  <div class="card"><h3>#${it.id} ${esc(it.title)} ${badge(it.status)}</h3>
+  <div class="meta">严重度 ${it.severity} · 申报量 ${it.quantity}/${it.threshold} · 优先级 ${it.priority} · 响应期限 ${it.deadline_hours}h · v${it.version}</div>
+  <div class="meta">关联治理设备：${it.devices.length?it.devices.map(x=>`#${x.id} ${esc(x.name)} ${badge(x.status)}`).join('，'):'（无）'}</div>
+  <div class="row">
+   <button class="act" onclick="transitionItem(${it.id},'submitted',${it.version})">提交</button>
+   <button class="act" onclick="transitionItem(${it.id},'inspection',${it.version})">开始检查</button>
+   <button class="act" onclick="transitionItem(${it.id},'correction',${it.version})">转整改</button>
+   <button class="act" onclick="transitionItem(${it.id},'approved',${it.version})">批准</button>
+   <button class="act" onclick="addRecord(${it.id})">登记问题</button>
+   <button class="act" onclick="listRecords(${it.id})">查看记录</button>
+  </div></div>`).join('')||'<p>暂无数据</p>';
+}
+async function transitionItem(id,target,version){
+  try{await api(`/api/items/${id}/transition`,'POST',{target,expected_version:version});loadAll()}catch(e){}
+}
+async function addRecord(id){
+  const detail=prompt('问题内容');if(!detail)return;
+  await api(`/api/items/${id}/records`,'POST',{kind:'inspection',detail,status:'open'});loadAll()
+}
+async function listRecords(id){
+  const d=await api(`/api/items/${id}/records`);
+  alert(JSON.stringify(d.records,null,2));
+}
+
+async function loadDevices(){
+  const d=await api('/api/devices');
+  $('deviceForm').innerHTML=`<h3>登记治理设备</h3>
+   <div class="row"><input id="dName" placeholder="设备名称"><input id="dCode" placeholder="编号（可选）">
+   <button class="act" onclick="createDevice()">登记</button></div>`;
+  $('deviceList').innerHTML=d.devices.map(x=>`
+  <div class="card"><h3>#${x.id} ${esc(x.name)} ${badge(x.status)}</h3>
+  <div class="meta">编号 ${esc(x.code)||'-'} · v${x.version} · 关联排放口：${x.outfalls.length?x.outfalls.map(o=>'#'+o).join('，'):'（无）'}
+  <br>关联快照 expected_links: <code>${esc(JSON.stringify(x.link_versions))}</code></div>
+  <div class="row">
+   <input id="attach-${x.id}" placeholder="关联排放口ID" style="width:9rem">
+   <button class="act" onclick="attachOutfall(${x.id})">关联排放口</button>
+   ${x.status==='in_use'
+     ? `<button class="danger act" onclick="stopDevice(${x.id},${x.version})">停用</button>`
+     : `<button class="act" onclick="restartDevice(${x.id},${x.version},${esc(JSON.stringify(x.link_versions))})">恢复启用</button>`}
+   ${x.links.map(l=>`<button class="danger act" onclick="detachOutfall(${x.id},${l.link_id},${l.version})">解除排放口#${l.item_id}</button>`).join('')}
+  </div></div>`).join('')||'<p>暂无设备</p>';
+}
+async function createDevice(){
+  await api('/api/devices','POST',{name:$('dName').value,code:$('dCode').value||null});loadAll()
+}
+async function attachOutfall(id){
+  const item_id=parseInt($('attach-'+id).value,10);if(!item_id)return msg('请输入排放口ID');
+  try{await api(`/api/devices/${id}/outfalls`,'POST',{item_id});loadAll()}catch(e){}
+}
+async function detachOutfall(id,linkId,version){
+  try{await api(`/api/devices/${id}/outfalls`,'POST',{link_id:linkId,expected_version:version});loadAll()}catch(e){}
+}
+async function stopDevice(id,version){
+  try{await api(`/api/devices/${id}/transition`,'POST',{target:'stopped',expected_version:version});loadAll()}catch(e){}
+}
+async function restartDevice(id,version,snapshot){
+  try{await api(`/api/devices/${id}/transition`,'POST',{target:'in_use',expected_version:version,expected_links:JSON.parse(snapshot)});loadAll()}catch(e){}
+}
+
+async function loadAudit(){
+  const d=await api('/api/audit');
+  $('auditOut').textContent=d.events.map(e=>
+    `${e.created_at} #${e.id} [${e.entity_type}#${e.entity_id}] ${e.action} by ${e.actor}\n  detail=${JSON.stringify(e.detail)}`).join('\n')||'暂无事件';
+}
+function showTab(name,btn){
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
+  btn.classList.add('active');$(name).classList.add('active');
+  if(name==='audit')loadAudit();
+}
+function loadAll(){Promise.all([loadItems(),loadDevices()]).catch(()=>{})}
+loadAll();
+</script>
+</body>
+</html>
